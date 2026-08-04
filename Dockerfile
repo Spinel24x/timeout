@@ -1,6 +1,5 @@
 FROM alpine:latest
 
-# Install dependencies
 RUN apk update && apk add --no-cache \
     curl \
     unzip \
@@ -8,9 +7,9 @@ RUN apk update && apk add --no-cache \
     jq \
     && rm -rf /var/cache/apk/*
 
-# Download and install Xray
 RUN mkdir -p /usr/local/xray && \
     XRAY_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name') && \
+    echo "Downloading Xray ${XRAY_VERSION}..." && \
     curl -L "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" -o /tmp/xray.zip && \
     unzip /tmp/xray.zip -d /usr/local/xray && \
     rm /tmp/xray.zip && \
