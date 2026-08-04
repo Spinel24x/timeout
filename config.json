@@ -1,33 +1,20 @@
 {
-  "log": {
-    "loglevel": "warning"
-  },
-  "inbounds": [
-    {
-      "port": 10000,
-      "listen": "0.0.0.0",
-      "protocol": "vless",
-      "settings": {
-        "clients": [],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "security": "none",
-        "wsSettings": {
-          "acceptProxyProtocol": false,
-          "path": "/",
-          "headers": {}
-        }
-      },
-      "tag": "vless-in"
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {},
-      "tag": "direct"
-    }
-  ]
+  "log": {"loglevel": "warning"},
+  "inbounds": [{
+    "port": 10000,
+    "listen": "127.0.0.1",
+    "protocol": "vless",
+    "settings": {"clients": [], "decryption": "none"},
+    "streamSettings": {
+      "network": "ws",
+      "security": "none",
+      "wsSettings": {"path": "/"}
+    },
+    "tag": "vless-in"
+  }],
+  "outbounds": [{
+    "protocol": "freedom",
+    "settings": {},
+    "tag": "direct"
+  }]
 }
