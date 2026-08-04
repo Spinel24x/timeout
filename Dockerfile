@@ -9,7 +9,6 @@ RUN apk update && apk add --no-cache \
     procps \
     && rm -rf /var/cache/apk/*
 
-# Install Xray
 RUN mkdir -p /usr/local/xray && \
     XRAY_VERSION=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name') && \
     curl -L "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip" -o /tmp/xray.zip && \
@@ -28,5 +27,6 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8080
+EXPOSE 10000
 
 CMD ["/entrypoint.sh"]
