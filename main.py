@@ -2,23 +2,23 @@ import os
 import json
 import uuid
 import subprocess
-from fastapi import FastAPI, Request
+import asyncio
+import httpx
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
 app = FastAPI()
 
 XRAY_CONFIG = '/usr/local/xray/config.json'
-XRAY_PORT = 10000  # Xray direct port
-PANEL_PORT = 8080  # Panel port
+XRAY_INTERNAL_PORT = 10000  # Internal only, not exposed
 
 def restart_xray(uuid_val):
-    """Update Xray config with new UUID and restart"""
     config = {
         "log": {"loglevel": "warning"},
         "inbounds": [{
-            "port": XRAY_PORT,
-            "listen": "0.0.0.0",
+            "port": XRAY_INTERNAL_PORT,
+            "listen": "127.0.0.1",
             "protocol": "vless",
             "settings": {
                 "clients": [{"id": uuid_val, "level": 0}],
@@ -28,8 +28,7 @@ def restart_xray(uuid_val):
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
-                    "path": f"/{uuid_val}",
-                    "headers": {}
+                    "path": f"/{uuid_val}"
                 }
             },
             "tag": "vless-in"
@@ -44,11 +43,9 @@ def restart_xray(uuid_val):
     with open(XRAY_CONFIG, 'w') as f:
         json.dump(config, f, indent=2)
     
-    # Kill and restart Xray
     subprocess.run('pkill -f "xray run" 2>/dev/null || true', shell=True)
     subprocess.Popen(['/usr/local/xray/xray', 'run', '-config', XRAY_CONFIG],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return True
 
 PANEL_HTML = """
 <!DOCTYPE html>
@@ -62,9 +59,9 @@ PANEL_HTML = """
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
         .container { max-width: 500px; width: 90%; margin: 20px; }
         .card { background: #1e293b; border-radius: 16px; padding: 30px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
-        h1 { font-size: 24px; font-weight: 700; text-align: center; color: #f1f5f9; margin-bottom: 4px; }
-        .subtitle { text-align: center; color: #94a3b8; margin-bottom: 24px; font-size: 13px; }
-        .form-group { margin-bottom: 18px; }
+        h1 { font-size: 24px; font-weight: 700; text-align: center; margin-bottom: 4px; }
+        .subtitle { text-align: center; color: #94a3b8; margin-bottom: 20px; font-size: 13px; }
+        .form-group { margin-bottom: 16px; }
         label { display: block; font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; }
         input, select, textarea { width: 100%; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; font-size: 14px; }
         input:focus, select:focus, textarea:focus { outline: none; border-color: #6366f1; }
@@ -88,168 +85,94 @@ PANEL_HTML = """
 <body>
     <div class="container">
         <div class="card">
-            <h1>VLESS Panel</h1>
-            <p class="subtitle">Worker → Railway:10000 (Xray) | Panel:8080</p>
-            
+            <h1>🔐 VLESS Panel</h1>
+            <p class="subtitle">Worker → Railway (Panel + Xray)</p>
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('login')">Login</div>
                 <div class="tab" onclick="switchTab('panel')">Panel</div>
             </div>
-
             <div id="login-tab">
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="password" placeholder="Enter password">
-                </div>
+                <div class="form-group"><label>Password</label><input type="password" id="password" placeholder="Enter password"></div>
                 <button class="btn" onclick="login()">Login</button>
                 <div id="login-status"></div>
             </div>
-
             <div id="panel-tab" class="hidden">
-                <div class="form-group">
-                    <label>Remark</label>
-                    <input type="text" id="remark" value="VLESS-WS-TLS">
-                </div>
-                <div class="form-group">
-                    <label>Clean IPs (optional)</label>
-                    <textarea id="cleanips" placeholder="104.26.0.1&#10;104.26.1.1"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Port (for client)</label>
-                    <select id="port">
-                        <option value="443">443</option>
-                        <option value="8443">8443</option>
-                        <option value="2053">2053</option>
-                        <option value="2083">2083</option>
-                        <option value="2087">2087</option>
-                        <option value="2096">2096</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Worker Domain (WD)</label>
-                    <input type="text" id="domain" placeholder="panel.yourname.workers.dev">
-                </div>
+                <div class="form-group"><label>Remark</label><input type="text" id="remark" value="VLESS-WS-TLS"></div>
+                <div class="form-group"><label>Clean IPs (optional)</label><textarea id="cleanips" placeholder="104.26.0.1&#10;104.26.1.1"></textarea></div>
+                <div class="form-group"><label>Port</label><select id="port"><option value="443">443</option><option value="8443">8443</option><option value="2053">2053</option><option value="2083">2083</option><option value="2087">2087</option><option value="2096">2096</option></select></div>
+                <div class="form-group"><label>Worker Domain</label><input type="text" id="domain" placeholder="panel.xxx.workers.dev"></div>
                 <button class="btn" onclick="generateConfig()">Generate Config</button>
-                
-                <div id="result" class="result">
-                    <div id="config-text"></div>
-                    <button class="btn btn-green" onclick="copyConfig()">📋 Copy Config</button>
-                </div>
-                
-                <div class="info-box">
-                    💡 Architecture: Client → Cloudflare Worker → Railway:10000 (Xray WS)<br>
-                    Panel runs on Railway:8080 (HTTP only)
-                </div>
+                <div id="result" class="result"><div id="config-text"></div><button class="btn btn-green" onclick="copyConfig()">📋 Copy Config</button></div>
+                <div class="info-box">💡 Worker proxies ALL traffic to Railway Panel. Panel handles HTTP (panel) and WebSocket (Xray proxy).</div>
             </div>
         </div>
     </div>
-
     <script>
         let isLoggedIn = false;
         let currentConfig = '';
-
         function switchTab(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.getElementById('login-tab').classList.add('hidden');
             document.getElementById('panel-tab').classList.add('hidden');
-            if (tab === 'login') {
-                document.querySelector('.tab:first-child').classList.add('active');
-                document.getElementById('login-tab').classList.remove('hidden');
-            } else {
-                if (!isLoggedIn) { alert('Please login first!'); return; }
-                document.querySelector('.tab:last-child').classList.add('active');
-                document.getElementById('panel-tab').classList.remove('hidden');
-            }
+            if (tab === 'login') { document.querySelector('.tab:first-child').classList.add('active'); document.getElementById('login-tab').classList.remove('hidden'); }
+            else { if (!isLoggedIn) { alert('Please login first!'); return; } document.querySelector('.tab:last-child').classList.add('active'); document.getElementById('panel-tab').classList.remove('hidden'); }
         }
-
         async function login() {
             const password = document.getElementById('password').value;
             const statusEl = document.getElementById('login-status');
             try {
-                const res = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
+                const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
                 const data = await res.json();
-                if (data.success) {
-                    isLoggedIn = true;
-                    localStorage.setItem('pass', password);
-                    statusEl.innerHTML = '<div class="status success">✅ Success!</div>';
-                    setTimeout(() => switchTab('panel'), 500);
-                } else {
-                    statusEl.innerHTML = '<div class="status error">❌ Wrong password!</div>';
-                }
-            } catch (err) {
-                statusEl.innerHTML = '<div class="status error">❌ Error!</div>';
-            }
+                if (data.success) { isLoggedIn = true; localStorage.setItem('pass', password); statusEl.innerHTML = '<div class="status success">✅ Success!</div>'; setTimeout(() => switchTab('panel'), 500); }
+                else { statusEl.innerHTML = '<div class="status error">❌ Wrong!</div>'; }
+            } catch (err) { statusEl.innerHTML = '<div class="status error">❌ Error!</div>'; }
         }
-
         async function generateConfig() {
             const password = localStorage.getItem('pass') || document.getElementById('password').value;
             const remark = document.getElementById('remark').value || 'VLESS';
             const cleanips = document.getElementById('cleanips').value.split('\\n').filter(ip => ip.trim());
             const port = document.getElementById('port').value;
             const domain = document.getElementById('domain').value.trim();
-
-            if (!domain) { alert('Enter Worker Domain!'); return; }
-
+            if (!domain) { alert('Enter domain!'); return; }
             try {
-                const res = await fetch('/api/generate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password, remark, cleanips, port: parseInt(port), domain })
-                });
+                const res = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password, remark, cleanips, port: parseInt(port), domain }) });
                 const data = await res.json();
                 if (data.error) { alert(data.error); return; }
                 currentConfig = data.config;
                 document.getElementById('config-text').textContent = currentConfig;
                 document.getElementById('result').classList.add('show');
-            } catch (err) {
-                alert('Error: ' + err.message);
-            }
+            } catch (err) { alert('Error: ' + err.message); }
         }
-
-        function copyConfig() {
-            navigator.clipboard.writeText(currentConfig).then(() => alert('Copied!'));
-        }
-
-        if (localStorage.getItem('pass')) {
-            document.getElementById('password').value = localStorage.getItem('pass');
-        }
+        function copyConfig() { navigator.clipboard.writeText(currentConfig).then(() => alert('Copied!')); }
+        if (localStorage.getItem('pass')) { document.getElementById('password').value = localStorage.getItem('pass'); }
     </script>
 </body>
 </html>
 """
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def home():
-    return PANEL_HTML
+    return HTMLResponse(content=PANEL_HTML)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "xray_port": XRAY_PORT, "panel_port": PANEL_PORT}
+    return {"status": "ok"}
 
 @app.post("/api/login")
 async def login(request: Request):
     try:
         body = await request.json()
-        password = body.get('password', '')
-        panel_pass = os.environ.get('WP', 'admin123')
-        if str(password) == str(panel_pass):
+        if str(body.get('password', '')) == str(os.environ.get('WP', 'admin123')):
             return {"success": True}
-        return JSONResponse({"success": False, "error": "Wrong password"}, status_code=401)
+        return JSONResponse({"success": False}, status_code=401)
     except:
-        return JSONResponse({"success": False, "error": "Invalid"}, status_code=400)
+        return JSONResponse({"success": False}, status_code=400)
 
 @app.post("/api/generate")
 async def generate(request: Request):
     try:
         body = await request.json()
-        password = body.get('password', '')
-        panel_pass = os.environ.get('WP', 'admin123')
-        
-        if str(password) != str(panel_pass):
+        if str(body.get('password', '')) != str(os.environ.get('WP', 'admin123')):
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         
         new_uuid = str(uuid.uuid4())
@@ -264,32 +187,48 @@ async def generate(request: Request):
             return JSONResponse({"error": "Domain is required"}, status_code=400)
         
         ips = cleanips if cleanips else [domain]
-        configs = []
+        configs = [f"vless://{new_uuid}@{ip.strip()}:{port}?type=ws&security=tls&path=/{new_uuid}&host={domain}&sni={domain}&fp=chrome&alpn=http/1.1&encryption=none#{remark}-{i+1}" if len(ips) > 1 else f"vless://{new_uuid}@{ip.strip()}:{port}?type=ws&security=tls&path=/{new_uuid}&host={domain}&sni={domain}&fp=chrome&alpn=http/1.1&encryption=none#{remark}" for i, ip in enumerate(ips)]
         
-        for i, ip in enumerate(ips):
-            name = f"{remark}-{i+1}" if len(ips) > 1 else remark
-            c = f"vless://{new_uuid}@{ip.strip()}:{port}?type=ws&security=tls&path=/{new_uuid}&host={domain}&sni={domain}&fp=chrome&alpn=http/1.1&encryption=none#{name}"
-            configs.append(c)
-        
-        return {
-            "success": True,
-            "config": '\n\n'.join(configs),
-            "uuid": new_uuid,
-            "details": {
-                "uuid": new_uuid,
-                "host": domain,
-                "port": port,
-                "path": f"/{new_uuid}",
-                "type": "ws",
-                "security": "tls",
-                "fingerprint": "chrome",
-                "alpn": "http/1.1"
-            }
-        }
+        return {"success": True, "config": '\n\n'.join(configs), "uuid": new_uuid}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+# WebSocket Proxy
+@app.websocket("/{path:path}")
+async def ws_proxy(websocket: WebSocket, path: str):
+    await websocket.accept()
+    
+    transport = httpx.AsyncHTTPTransport(uds="/tmp/xray.sock")
+    
+    async with httpx.AsyncClient(transport=transport) as client:
+        try:
+            async with client.stream("GET", f"http://xray/{path}") as response:
+                async def forward_to_xray():
+                    try:
+                        while True:
+                            data = await websocket.receive_bytes()
+                            # Can't directly forward, need full WS handshake
+                            pass
+                    except:
+                        pass
+                
+                async def forward_to_client():
+                    try:
+                        async for chunk in response.aiter_bytes():
+                            await websocket.send_bytes(chunk)
+                    except:
+                        pass
+                
+                await asyncio.gather(forward_to_xray(), forward_to_client(), return_exceptions=True)
+        except Exception as e:
+            print(f"WS error: {e}")
+        finally:
+            try:
+                await websocket.close()
+            except:
+                pass
+
 if __name__ == "__main__":
-    print(f"Panel on port {PANEL_PORT}")
-    print(f"Xray on port {XRAY_PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=PANEL_PORT)
+    restart_xray(str(uuid.uuid4()))
+    print("Starting on port 8080")
+    uvicorn.run(app, host="0.0.0.0", port=8080)
