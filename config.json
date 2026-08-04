@@ -1,6 +1,6 @@
 {
   "log": {
-    "loglevel": "warning"
+    "loglevel": "debug"
   },
   "inbounds": [
     {
@@ -8,24 +8,18 @@
       "listen": "0.0.0.0",
       "protocol": "vless",
       "settings": {
-        "clients": [
-          {
-            "id": "PLACEHOLDER_UUID",
-            "level": 0
-          }
-        ],
+        "clients": [],
         "decryption": "none"
       },
       "streamSettings": {
         "network": "ws",
         "security": "none",
         "wsSettings": {
-          "path": "/PLACEHOLDER_PATH",
-          "headers": {
-            "Host": ""
-          }
+          "path": "/",
+          "headers": {}
         }
-      }
+      },
+      "tag": "vless-in"
     }
   ],
   "outbounds": [
@@ -33,20 +27,6 @@
       "protocol": "freedom",
       "settings": {},
       "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "settings": {},
-      "tag": "blocked"
     }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "type": "field",
-        "ip": ["geoip:private"],
-        "outboundTag": "blocked"
-      }
-    ]
-  }
+  ]
 }
