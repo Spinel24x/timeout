@@ -5,6 +5,7 @@ RUN apk update && apk add --no-cache \
     unzip \
     bash \
     jq \
+    ca-certificates \
     && rm -rf /var/cache/apk/*
 
 RUN mkdir -p /usr/local/xray && \
