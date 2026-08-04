@@ -15,8 +15,11 @@
         "network": "ws",
         "security": "none",
         "wsSettings": {
+          "acceptProxyProtocol": false,
           "path": "/",
-          "headers": {}
+          "headers": {
+            "Host": ""
+          }
         }
       },
       "tag": "vless-in"
