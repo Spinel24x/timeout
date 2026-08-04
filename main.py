@@ -2,100 +2,101 @@ import os
 import json
 import uuid
 import subprocess
-import shutil
-from pathlib import Path
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 import uvicorn
 
 app = FastAPI()
 
-# Generate or load UUID
-UUID_FILE = '/usr/local/xray/current_uuid.txt'
+XRAY_CONFIG = '/usr/local/xray/config.json'
+XRAY_PORT = 10000  # Xray direct port
+PANEL_PORT = 8080  # Panel port
 
-def get_uuid():
-    if os.path.exists(UUID_FILE):
-        with open(UUID_FILE, 'r') as f:
-            return f.read().strip()
-    new_uuid = str(uuid.uuid4())
-    with open(UUID_FILE, 'w') as f:
-        f.write(new_uuid)
-    return new_uuid
-
-def update_xray_config(uuid):
-    config_path = '/usr/local/xray/config.json'
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+def restart_xray(uuid_val):
+    """Update Xray config with new UUID and restart"""
+    config = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [{
+            "port": XRAY_PORT,
+            "listen": "0.0.0.0",
+            "protocol": "vless",
+            "settings": {
+                "clients": [{"id": uuid_val, "level": 0}],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {
+                    "path": f"/{uuid_val}",
+                    "headers": {}
+                }
+            },
+            "tag": "vless-in"
+        }],
+        "outbounds": [{
+            "protocol": "freedom",
+            "settings": {},
+            "tag": "direct"
+        }]
+    }
     
-    config['inbounds'][0]['settings']['clients'] = [{
-        "id": uuid,
-        "level": 0
-    }]
-    config['inbounds'][0]['streamSettings']['wsSettings']['path'] = f'/{uuid}'
-    
-    with open(config_path, 'w') as f:
+    with open(XRAY_CONFIG, 'w') as f:
         json.dump(config, f, indent=2)
     
-    # Restart Xray
-    os.system('pkill xray 2>/dev/null; sleep 1; /usr/local/xray/xray run -config /usr/local/xray/config.json &')
-    
-    return config
+    # Kill and restart Xray
+    subprocess.run('pkill -f "xray run" 2>/dev/null || true', shell=True)
+    subprocess.Popen(['/usr/local/xray/xray', 'run', '-config', XRAY_CONFIG],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
-# Panel HTML
 PANEL_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VLESS Panel - BPB Style</title>
+    <title>VLESS Panel</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #e2e8f0; min-height: 100vh; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { text-align: center; padding: 40px 0; }
-        .header h1 { font-size: 32px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #6366f1, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .header p { color: #94a3b8; font-size: 14px; }
-        .card { background: #1e293b; border-radius: 16px; padding: 24px; margin-bottom: 20px; border: 1px solid #334155; }
-        .card h2 { font-size: 18px; margin-bottom: 16px; color: #f1f5f9; }
-        .form-group { margin-bottom: 16px; }
-        label { display: block; font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .container { max-width: 500px; width: 90%; margin: 20px; }
+        .card { background: #1e293b; border-radius: 16px; padding: 30px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+        h1 { font-size: 24px; font-weight: 700; text-align: center; color: #f1f5f9; margin-bottom: 4px; }
+        .subtitle { text-align: center; color: #94a3b8; margin-bottom: 24px; font-size: 13px; }
+        .form-group { margin-bottom: 18px; }
+        label { display: block; font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; }
         input, select, textarea { width: 100%; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; font-size: 14px; }
         input:focus, select:focus, textarea:focus { outline: none; border-color: #6366f1; }
-        textarea { resize: vertical; min-height: 80px; font-family: monospace; }
-        .btn { width: 100%; padding: 12px; background: #6366f1; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-        .btn:hover { background: #4f46e5; transform: translateY(-1px); }
-        .btn-green { background: #22c55e; }
+        textarea { resize: vertical; min-height: 70px; font-family: monospace; }
+        .btn { width: 100%; padding: 14px; background: #6366f1; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 8px; }
+        .btn:hover { background: #4f46e5; }
+        .btn-green { background: #22c55e; margin-top: 12px; }
         .btn-green:hover { background: #16a34a; }
-        .result { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-top: 16px; font-family: monospace; font-size: 12px; word-break: break-all; display: none; }
+        .result { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-top: 16px; font-family: monospace; font-size: 12px; word-break: break-all; display: none; line-height: 1.6; }
         .result.show { display: block; }
         .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
-        .tab { flex: 1; padding: 10px; text-align: center; background: #1e293b; border: 1px solid #334155; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px; }
+        .tab { flex: 1; padding: 10px; text-align: center; background: #1e293b; border: 1px solid #334155; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px; color: #94a3b8; }
         .tab.active { background: #6366f1; border-color: #6366f1; color: white; }
         .hidden { display: none; }
+        .status { padding: 10px; border-radius: 8px; margin-top: 12px; font-size: 13px; text-align: center; }
+        .status.success { background: #065f46; color: #6ee7b7; }
+        .status.error { background: #7f1d1d; color: #fca5a5; }
         .info-box { background: #1e3a5f; border: 1px solid #3b82f6; border-radius: 8px; padding: 12px; margin-top: 16px; font-size: 12px; color: #93c5fd; }
-        .status { padding: 8px 12px; border-radius: 6px; margin-top: 12px; font-size: 13px; text-align: center; }
-        .status.online { background: #065f46; color: #6ee7b7; }
-        .status.offline { background: #7f1d1d; color: #fca5a5; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🔐 VLESS Panel</h1>
-            <p>Cloudflare Worker → Railway Xray</p>
-        </div>
+        <div class="card">
+            <h1>VLESS Panel</h1>
+            <p class="subtitle">Worker → Railway:10000 (Xray) | Panel:8080</p>
+            
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('login')">Login</div>
+                <div class="tab" onclick="switchTab('panel')">Panel</div>
+            </div>
 
-        <div class="tabs">
-            <div class="tab active" onclick="switchTab('login')">Login</div>
-            <div class="tab" onclick="switchTab('panel')">Panel</div>
-        </div>
-
-        <div id="login-tab">
-            <div class="card">
-                <h2>Login</h2>
+            <div id="login-tab">
                 <div class="form-group">
                     <label>Password</label>
                     <input type="password" id="password" placeholder="Enter password">
@@ -103,21 +104,18 @@ PANEL_HTML = """
                 <button class="btn" onclick="login()">Login</button>
                 <div id="login-status"></div>
             </div>
-        </div>
 
-        <div id="panel-tab" class="hidden">
-            <div class="card">
-                <h2>Generate VLESS Config</h2>
+            <div id="panel-tab" class="hidden">
                 <div class="form-group">
                     <label>Remark</label>
-                    <input type="text" id="remark" value="VLESS-WS-TLS" placeholder="Config name">
+                    <input type="text" id="remark" value="VLESS-WS-TLS">
                 </div>
                 <div class="form-group">
-                    <label>Clean IPs (one per line)</label>
+                    <label>Clean IPs (optional)</label>
                     <textarea id="cleanips" placeholder="104.26.0.1&#10;104.26.1.1"></textarea>
                 </div>
                 <div class="form-group">
-                    <label>Port</label>
+                    <label>Port (for client)</label>
                     <select id="port">
                         <option value="443">443</option>
                         <option value="8443">8443</option>
@@ -128,15 +126,20 @@ PANEL_HTML = """
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Domain (Worker/Custom)</label>
-                    <input type="text" id="domain" placeholder="your-domain.com">
+                    <label>Worker Domain (WD)</label>
+                    <input type="text" id="domain" placeholder="panel.yourname.workers.dev">
                 </div>
                 <button class="btn" onclick="generateConfig()">Generate Config</button>
+                
                 <div id="result" class="result">
                     <div id="config-text"></div>
-                    <button class="btn btn-green" style="margin-top:12px;" onclick="copyConfig()">Copy Config</button>
+                    <button class="btn btn-green" onclick="copyConfig()">📋 Copy Config</button>
                 </div>
-                <div class="info-box">⚡ TLS is handled by Cloudflare. Xray runs WS (no TLS) on Railway. Worker proxies all traffic.</div>
+                
+                <div class="info-box">
+                    💡 Architecture: Client → Cloudflare Worker → Railway:10000 (Xray WS)<br>
+                    Panel runs on Railway:8080 (HTTP only)
+                </div>
             </div>
         </div>
     </div>
@@ -171,31 +174,31 @@ PANEL_HTML = """
                 const data = await res.json();
                 if (data.success) {
                     isLoggedIn = true;
-                    localStorage.setItem('panel_pass', password);
-                    statusEl.innerHTML = '<div class="status online">✅ Login successful!</div>';
+                    localStorage.setItem('pass', password);
+                    statusEl.innerHTML = '<div class="status success">✅ Success!</div>';
                     setTimeout(() => switchTab('panel'), 500);
                 } else {
-                    statusEl.innerHTML = '<div class="status offline">❌ Wrong password!</div>';
+                    statusEl.innerHTML = '<div class="status error">❌ Wrong password!</div>';
                 }
             } catch (err) {
-                statusEl.innerHTML = '<div class="status offline">❌ Connection error!</div>';
+                statusEl.innerHTML = '<div class="status error">❌ Error!</div>';
             }
         }
 
         async function generateConfig() {
-            const password = localStorage.getItem('panel_pass') || document.getElementById('password').value;
-            const remark = document.getElementById('remark').value;
+            const password = localStorage.getItem('pass') || document.getElementById('password').value;
+            const remark = document.getElementById('remark').value || 'VLESS';
             const cleanips = document.getElementById('cleanips').value.split('\\n').filter(ip => ip.trim());
             const port = document.getElementById('port').value;
-            const domain = document.getElementById('domain').value;
+            const domain = document.getElementById('domain').value.trim();
 
-            if (!domain) { alert('Please enter domain!'); return; }
+            if (!domain) { alert('Enter Worker Domain!'); return; }
 
             try {
                 const res = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password, remark, cleanips, port, domain })
+                    body: JSON.stringify({ password, remark, cleanips, port: parseInt(port), domain })
                 });
                 const data = await res.json();
                 if (data.error) { alert(data.error); return; }
@@ -211,9 +214,8 @@ PANEL_HTML = """
             navigator.clipboard.writeText(currentConfig).then(() => alert('Copied!'));
         }
 
-        // Check if already logged in
-        if (localStorage.getItem('panel_pass')) {
-            document.getElementById('password').value = localStorage.getItem('panel_pass');
+        if (localStorage.getItem('pass')) {
+            document.getElementById('password').value = localStorage.getItem('pass');
         }
     </script>
 </body>
@@ -224,17 +226,21 @@ PANEL_HTML = """
 async def home():
     return PANEL_HTML
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "xray_port": XRAY_PORT, "panel_port": PANEL_PORT}
+
 @app.post("/api/login")
 async def login(request: Request):
     try:
         body = await request.json()
         password = body.get('password', '')
         panel_pass = os.environ.get('WP', 'admin123')
-        if password == panel_pass:
+        if str(password) == str(panel_pass):
             return {"success": True}
         return JSONResponse({"success": False, "error": "Wrong password"}, status_code=401)
     except:
-        return JSONResponse({"success": False, "error": "Invalid request"}, status_code=400)
+        return JSONResponse({"success": False, "error": "Invalid"}, status_code=400)
 
 @app.post("/api/generate")
 async def generate(request: Request):
@@ -243,11 +249,11 @@ async def generate(request: Request):
         password = body.get('password', '')
         panel_pass = os.environ.get('WP', 'admin123')
         
-        if password != panel_pass:
+        if str(password) != str(panel_pass):
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
         
         new_uuid = str(uuid.uuid4())
-        update_xray_config(new_uuid)
+        restart_xray(new_uuid)
         
         remark = body.get('remark', 'VLESS-WS-TLS')
         cleanips = body.get('cleanips', [])
@@ -262,8 +268,8 @@ async def generate(request: Request):
         
         for i, ip in enumerate(ips):
             name = f"{remark}-{i+1}" if len(ips) > 1 else remark
-            config = f"vless://{new_uuid}@{ip.strip()}:{port}?type=ws&security=tls&path=/{new_uuid}&host={domain}&sni={domain}&fp=chrome&alpn=http/1.1&encryption=none#{name}"
-            configs.append(config)
+            c = f"vless://{new_uuid}@{ip.strip()}:{port}?type=ws&security=tls&path=/{new_uuid}&host={domain}&sni={domain}&fp=chrome&alpn=http/1.1&encryption=none#{name}"
+            configs.append(c)
         
         return {
             "success": True,
@@ -283,16 +289,7 @@ async def generate(request: Request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# Health check
-@app.get("/health")
-async def health():
-    return {"status": "ok", "xray": "running"}
-
 if __name__ == "__main__":
-    # Start Xray on startup
-    current_uuid = get_uuid()
-    update_xray_config(current_uuid)
-    print(f"Xray started with UUID: {current_uuid}")
-    
-    # Start FastAPI
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    print(f"Panel on port {PANEL_PORT}")
+    print(f"Xray on port {XRAY_PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=PANEL_PORT)
